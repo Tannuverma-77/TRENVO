@@ -835,71 +835,68 @@ def main():
                         <div style="font-size:1rem;font-weight:600;">{tracks['track_genre'].mode()[0] if len(tracks)>0 else "–"}</div>
                     </div>""", unsafe_allow_html=True)
 
-                # Radar chart (simulated audio features from trend + popularity signals)
+                # Simple Side-by-Side Audio Profile Comparison (No complex radar/spider web)
                 st.markdown('<div class="section-title">Audio Profile Comparison</div>', unsafe_allow_html=True)
-                def safe_norm(series):
-                    mn, mx = series.min(), series.max()
-                    return float(((series - mn) / (mx - mn + 0.01)).mean()) if len(series) > 0 else 0.5
+                
+                # Calculate clean, intuitive 0-100 scores
+                a1_trend = round(float(t1['trend_score'].mean()), 1) if len(t1) > 0 else 0.0
+                a2_trend = round(float(t2['trend_score'].mean()), 1) if len(t2) > 0 else 0.0
+                
+                a1_pop = round(float(t1['popularity'].mean()), 1) if len(t1) > 0 else 0.0
+                a2_pop = round(float(t2['popularity'].mean()), 1) if len(t2) > 0 else 0.0
+                
+                a1_peak = round(float(t1['trend_score'].max()), 1) if len(t1) > 0 else 0.0
+                a2_peak = round(float(t2['trend_score'].max()), 1) if len(t2) > 0 else 0.0
+                
+                a1_const = round(max(20.0, min(100.0, 100.0 - float(t1['trend_score'].std() if len(t1) > 1 else 10) * 2.5)), 1)
+                a2_const = round(max(20.0, min(100.0, 100.0 - float(t2['trend_score'].std() if len(t2) > 1 else 10) * 2.5)), 1)
+                
+                a1_count = len(t1)
+                a2_count = len(t2)
+                
+                metrics = ['Trend Score', 'Popularity', 'Peak Score', 'Consistency', 'Catalog Size']
+                a1_scores = [a1_trend, a1_pop, a1_peak, a1_const, min(100, a1_count * 5)]
+                a2_scores = [a2_trend, a2_pop, a2_peak, a2_const, min(100, a2_count * 5)]
 
-                def clamp(val):
-                    return round(float(np.clip(val, 0.0, 1.0)), 2)
-
-                labels = ['Trend', 'Popularity', 'Song Count', 'Peak Score', 'Consistency']
-
-                a1_c = 1.0 - (t1['trend_score'].std() / 30 if len(t1) > 1 and not pd.isna(t1['trend_score'].std()) else 0.2)
-                a2_c = 1.0 - (t2['trend_score'].std() / 30 if len(t2) > 1 and not pd.isna(t2['trend_score'].std()) else 0.2)
-
-                a1_vals = [
-                    clamp(safe_norm(t1['trend_score'])),
-                    clamp(safe_norm(t1['popularity'])),
-                    clamp(len(t1) / 20),
-                    clamp(t1['trend_score'].max() / 100 if len(t1) > 0 else 0.5),
-                    clamp(a1_c)
-                ]
-                a2_vals = [
-                    clamp(safe_norm(t2['trend_score'])),
-                    clamp(safe_norm(t2['popularity'])),
-                    clamp(len(t2) / 20),
-                    clamp(t2['trend_score'].max() / 100 if len(t2) > 0 else 0.5),
-                    clamp(a2_c)
-                ]
-
-                radar = go.Figure()
-                artist_configs = [
-                    (a1_query, a1_vals, '#1DB954', 'rgba(29, 185, 84, 0.25)'),
-                    (a2_query, a2_vals, '#A855F7', 'rgba(168, 85, 247, 0.25)')
-                ]
-                for name, vals, line_color, fill_color in artist_configs:
-                    radar.add_trace(go.Scatterpolar(
-                        r=vals + [vals[0]],
-                        theta=labels + [labels[0]],
-                        fill='toself',
-                        fillcolor=fill_color,
-                        name=name,
-                        line=dict(color=line_color, width=2.5),
-                    ))
-
-                radar.update_layout(
-                    height=380,
-                    margin=dict(l=55, r=55, t=40, b=40),
-                    polar=dict(
-                        radialaxis=dict(
-                            visible=True,
-                            range=[0, 1],
-                            tickmode='linear',
-                            tick0=0,
-                            dtick=0.25,
-                            gridcolor='#333333',
-                            tickfont=dict(color='#8899AA', size=9),
-                        ),
-                        angularaxis=dict(
-                            gridcolor='#333333',
-                            tickfont=dict(color='white', size=11),
-                        ),
-                        bgcolor='#0A0E1A',
-                    ),
+                # Clean Horizontal Side-by-Side Comparison Bars
+                bar_fig = go.Figure()
+                bar_fig.add_trace(go.Bar(
+                    y=metrics,
+                    x=a1_scores,
+                    name=f"🟢 {a1_query}",
+                    orientation='h',
+                    marker=dict(color='#1DB954'),
+                    text=[f"{v:.1f}" for v in a1_scores],
+                    textposition='auto',
+                    textfont=dict(color='black', size=11),
+                ))
+                bar_fig.add_trace(go.Bar(
+                    y=metrics,
+                    x=a2_scores,
+                    name=f"🟣 {a2_query}",
+                    orientation='h',
+                    marker=dict(color='#A855F7'),
+                    text=[f"{v:.1f}" for v in a2_scores],
+                    textposition='auto',
+                    textfont=dict(color='white', size=11),
+                ))
+                bar_fig.update_layout(
+                    barmode='group',
+                    height=360,
+                    margin=dict(l=20, r=20, t=30, b=20),
                     paper_bgcolor='#0A0E1A',
+                    plot_bgcolor='#0A0E1A',
                     font=dict(color='white'),
+                    xaxis=dict(
+                        title="Score (0 - 100)",
+                        range=[0, 105],
+                        gridcolor='#222222',
+                        tickfont=dict(color='#8899AA'),
+                    ),
+                    yaxis=dict(
+                        autorange="reversed",
+                        tickfont=dict(color='white', size=12),
+                    ),
                     legend=dict(
                         orientation='h',
                         y=1.14,
@@ -908,54 +905,42 @@ def main():
                         font=dict(size=12)
                     ),
                 )
-                st.plotly_chart(radar, use_container_width=True, config={'displayModeBar': False})
+                st.plotly_chart(bar_fig, use_container_width=True, config={'displayModeBar': False})
 
-                # Side-by-side comparison (bars / table)
-                comp_tab1, comp_tab2 = st.tabs(["📊 Comparison Bars", "📋 Comparison Table"])
-                with comp_tab1:
-                    bar_fig = go.Figure()
-                    bar_fig.add_trace(go.Bar(
-                        name=a1_query,
-                        x=labels,
-                        y=a1_vals,
-                        marker_color='#1DB954',
-                        opacity=0.9,
-                        text=[f"{v:.2f}" for v in a1_vals],
-                        textposition='auto',
-                    ))
-                    bar_fig.add_trace(go.Bar(
-                        name=a2_query,
-                        x=labels,
-                        y=a2_vals,
-                        marker_color='#A855F7',
-                        opacity=0.9,
-                        text=[f"{v:.2f}" for v in a2_vals],
-                        textposition='auto',
-                    ))
-                    bar_fig.update_layout(
-                        barmode='group',
-                        height=280,
-                        margin=dict(l=20, r=20, t=20, b=25),
-                        paper_bgcolor='#0A0E1A',
-                        plot_bgcolor='#0A0E1A',
-                        font=dict(color='white'),
-                        yaxis=dict(range=[0, 1.1], gridcolor='#222222', tickfont=dict(color='#8899AA')),
-                        xaxis=dict(tickfont=dict(color='white')),
-                        legend=dict(orientation='h', y=1.15, x=0.5, xanchor='center')
-                    )
-                    st.plotly_chart(bar_fig, use_container_width=True, config={'displayModeBar': False})
-
-                with comp_tab2:
-                    comp_data = []
-                    for lbl, v1, v2 in zip(labels, a1_vals, a2_vals):
-                        leader = f"🟢 {a1_query}" if v1 > v2 else (f"🟣 {a2_query}" if v2 > v1 else "Tie 🤝")
-                        comp_data.append({
-                            "Metric": lbl,
-                            f"🟢 {a1_query}": f"{v1:.2f}",
-                            f"🟣 {a2_query}": f"{v2:.2f}",
-                            "Leader 🏆": leader
-                        })
-                    st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+                # Clear Side-by-Side Comparison Table
+                comp_data = [
+                    {
+                        "Metric": "📈 Avg Trend Score",
+                        f"🟢 {a1_query}": f"{a1_trend} / 100",
+                        f"🟣 {a2_query}": f"{a2_trend} / 100",
+                        "Leader 🏆": f"🟢 {a1_query}" if a1_trend > a2_trend else (f"🟣 {a2_query}" if a2_trend > a1_trend else "Tie 🤝")
+                    },
+                    {
+                        "Metric": "🔥 Popularity",
+                        f"🟢 {a1_query}": f"{a1_pop} / 100",
+                        f"🟣 {a2_query}": f"{a2_pop} / 100",
+                        "Leader 🏆": f"🟢 {a1_query}" if a1_pop > a2_pop else (f"🟣 {a2_query}" if a2_pop > a1_pop else "Tie 🤝")
+                    },
+                    {
+                        "Metric": "⭐ Peak Hit Score",
+                        f"🟢 {a1_query}": f"{a1_peak} / 100",
+                        f"🟣 {a2_query}": f"{a2_peak} / 100",
+                        "Leader 🏆": f"🟢 {a1_query}" if a1_peak > a2_peak else (f"🟣 {a2_query}" if a2_peak > a1_peak else "Tie 🤝")
+                    },
+                    {
+                        "Metric": "🎯 Hit Consistency",
+                        f"🟢 {a1_query}": f"{a1_const}%",
+                        f"🟣 {a2_query}": f"{a2_const}%",
+                        "Leader 🏆": f"🟢 {a1_query}" if a1_const > a2_const else (f"🟣 {a2_query}" if a2_const > a1_const else "Tie 🤝")
+                    },
+                    {
+                        "Metric": "🎵 Tracks Analyzed",
+                        f"🟢 {a1_query}": f"{a1_count} songs",
+                        f"🟣 {a2_query}": f"{a2_count} songs",
+                        "Leader 🏆": f"🟢 {a1_query}" if a1_count > a2_count else (f"🟣 {a2_query}" if a2_count > a1_count else "Tie 🤝")
+                    },
+                ]
+                st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
 
                 # Winner banner
                 st.markdown(f"""
