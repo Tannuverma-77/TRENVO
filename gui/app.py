@@ -23,21 +23,25 @@ def fetch_itunes_top_charts(limit=100, country="us"):
     """Fetch live top songs from Apple Music / iTunes RSS (free, no key needed)."""
     try:
         url = f"https://itunes.apple.com/{country}/rss/topsongs/limit={limit}/json"
-        r = requests.get(url, timeout=8)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, headers=headers, timeout=8)
         if r.status_code == 200:
-            entries = r.json()['feed']['entry']
+            feed = r.json().get('feed', {})
+            entries = feed.get('entry', [])
+            if isinstance(entries, dict):
+                entries = [entries]
             tracks = []
             for i, e in enumerate(entries):
-                track_name = e['im:name']['label']
-                artist     = e['im:artist']['label']
-                genre      = e['category']['attributes']['label']
-                itunes_url = e['id']['label']
-                # Album art from iTunes (100x100 → get bigger version)
-                art_url    = e['im:image'][-1]['label'].replace('100x100', '300x300')
+                track_name = e.get('im:name', {}).get('label', 'Unknown')
+                artist     = e.get('im:artist', {}).get('label', 'Unknown')
+                genre      = e.get('category', {}).get('attributes', {}).get('label', 'Pop')
+                itunes_url = e.get('id', {}).get('label', '')
+                images     = e.get('im:image', [])
+                art_url    = images[-1].get('label', '').replace('100x100', '300x300') if images else ''
                 price_str  = e.get('im:price', {}).get('attributes', {}).get('amount', '0')
                 try:
                     price = float(price_str)
-                except:
+                except Exception:
                     price = 0.0
 
                 # Derive trend metrics from real chart position
@@ -57,7 +61,8 @@ def fetch_itunes_top_charts(limit=100, country="us"):
                     'art_url':     art_url,
                     'itunes_url':  itunes_url,
                 })
-            return pd.DataFrame(tracks), True
+            if tracks:
+                return pd.DataFrame(tracks), True
     except Exception:
         pass
     return None, False
@@ -131,20 +136,26 @@ def fetch_itunes_genre_charts():
         'K-Pop':      51,
     }
     results = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for genre_name, gid in genre_ids.items():
         try:
             url = f"https://itunes.apple.com/us/rss/topsongs/limit=5/genre={gid}/json"
-            r = requests.get(url, timeout=5)
+            r = requests.get(url, headers=headers, timeout=5)
             if r.status_code == 200:
-                entries = r.json()['feed']['entry']
-                results[genre_name] = [
-                    {
-                        'track_name': e['im:name']['label'],
-                        'artists':    e['im:artist']['label'],
-                        'art_url':    e['im:image'][-1]['label'].replace('100x100', '300x300'),
-                    }
-                    for e in entries
-                ]
+                feed = r.json().get('feed', {})
+                entries = feed.get('entry', [])
+                if isinstance(entries, dict):
+                    entries = [entries]
+                track_list = []
+                for e in entries:
+                    images = e.get('im:image', [])
+                    track_list.append({
+                        'track_name': e.get('im:name', {}).get('label', 'Unknown'),
+                        'artists':    e.get('im:artist', {}).get('label', 'Unknown'),
+                        'art_url':    images[-1].get('label', '').replace('100x100', '300x300') if images else '',
+                    })
+                if track_list:
+                    results[genre_name] = track_list
         except Exception:
             pass
     return results
@@ -155,19 +166,51 @@ def fetch_itunes_genre_charts():
 @st.cache_data
 def load_local_data():
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    fp   = os.path.join(base, "data", "processed", "music_data_features.csv")
-    wp   = os.path.join(base, "data", "processed", "weekly_trends.csv")
-    if os.path.exists(fp) and os.path.exists(wp):
-        return pd.read_csv(fp), pd.read_csv(wp)
+    candidates_fp = [
+        os.path.join(base, "data", "processed", "music_data_features.csv"),
+        os.path.join(os.path.dirname(base), "data", "processed", "music_data_features.csv"),
+        "data/processed/music_data_features.csv",
+        "TRENVO/data/processed/music_data_features.csv",
+    ]
+    candidates_wp = [
+        os.path.join(base, "data", "processed", "weekly_trends.csv"),
+        os.path.join(os.path.dirname(base), "data", "processed", "weekly_trends.csv"),
+        "data/processed/weekly_trends.csv",
+        "TRENVO/data/processed/weekly_trends.csv",
+    ]
+    fp = next((p for p in candidates_fp if os.path.exists(p)), None)
+    wp = next((p for p in candidates_wp if os.path.exists(p)), None)
+
+    if fp and wp:
+        df = pd.read_csv(fp)
+        wdf = pd.read_csv(wp)
+        if not df.empty:
+            if 'rank' not in df.columns:
+                df = df.sort_values('trend_score', ascending=False).reset_index(drop=True)
+                df['rank'] = df.index + 1
+            if 'growth_pct' not in df.columns:
+                df['growth_pct'] = 5.0
+            if 'art_url' not in df.columns:
+                df['art_url'] = ''
+        return df, wdf
     return pd.DataFrame(), pd.DataFrame()
 
 
 @st.cache_resource
 def load_model():
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    mp   = os.path.join(base, "model", "trend_model.pkl")
-    if os.path.exists(mp):
-        return joblib.load(mp)
+    candidates_mp = [
+        os.path.join(base, "model", "trend_model.pkl"),
+        os.path.join(os.path.dirname(base), "model", "trend_model.pkl"),
+        "model/trend_model.pkl",
+        "TRENVO/model/trend_model.pkl",
+    ]
+    for mp in candidates_mp:
+        if os.path.exists(mp):
+            try:
+                return joblib.load(mp)
+            except Exception:
+                pass
     return None
 
 
@@ -530,7 +573,16 @@ def main():
     local_df, local_weekly = load_local_data()
     model_data             = load_model()
 
-    display_df = live_df if using_live else local_df
+    display_df = live_df if (using_live and live_df is not None and not live_df.empty) else local_df
+
+    if not display_df.empty:
+        if 'rank' not in display_df.columns:
+            display_df = display_df.sort_values('trend_score', ascending=False).reset_index(drop=True)
+            display_df['rank'] = display_df.index + 1
+        if 'growth_pct' not in display_df.columns:
+            display_df['growth_pct'] = 0.0
+        if 'art_url' not in display_df.columns:
+            display_df['art_url'] = ''
 
     # ── Sidebar ──
     st.sidebar.markdown("""
@@ -566,10 +618,10 @@ def main():
     # ════════════════════════════════════════════════════════════
     if page == "🏠 Dashboard":
         # Ticker
-        top5 = display_df.sort_values('trend_score', ascending=False).head(5)
+        top5 = display_df.sort_values('trend_score', ascending=False).head(5) if not display_df.empty else pd.DataFrame()
         ticker_items = " &nbsp;&nbsp;•&nbsp;&nbsp; ".join(
             f"🔥 #{r.rank} {r.track_name} — {r.artists}" for r in top5.itertuples()
-        )
+        ) if not top5.empty else "No live chart data available"
         st.markdown(
             f'<div class="ticker-wrap"><div class="ticker"><b>TRENDING NOW &nbsp;›&nbsp;</b> {ticker_items}</div></div>',
             unsafe_allow_html=True,
@@ -606,10 +658,16 @@ def main():
                 """, unsafe_allow_html=True)
 
         # ── KPI row ──
-        top_artist = display_df.groupby('artists')['trend_score'].mean().idxmax()
-        top_genre  = display_df.groupby('track_genre')['trend_score'].mean().idxmax()
-        avg_score  = display_df['trend_score'].mean()
-        trending_count = len(display_df[display_df['trend_score'] >= 75])
+        if not display_df.empty:
+            top_artist = display_df.groupby('artists')['trend_score'].mean().idxmax()
+            top_genre  = display_df.groupby('track_genre')['trend_score'].mean().idxmax()
+            avg_score  = display_df['trend_score'].mean()
+            trending_count = len(display_df[display_df['trend_score'] >= 75])
+        else:
+            top_artist = "N/A"
+            top_genre  = "N/A"
+            avg_score  = 0
+            trending_count = 0
 
         c1, c2, c3, c4 = st.columns(4)
         cards = [
@@ -726,6 +784,18 @@ def main():
                 artist_tracks = fetch_itunes_artist_tracks(artist_query, limit=20)
                 mb_info       = fetch_musicbrainz_artist(artist_query)
 
+            if artist_tracks.empty and not local_df.empty:
+                artist_tracks = local_df[local_df['artists'].str.contains(artist_query, case=False, na=False)].head(20).copy()
+                if not artist_tracks.empty:
+                    if 'art_url' not in artist_tracks.columns:
+                        artist_tracks['art_url'] = ''
+                    if 'collection' not in artist_tracks.columns:
+                        artist_tracks['collection'] = artist_tracks.get('album_name', 'Single')
+                    if 'release_date' not in artist_tracks.columns:
+                        artist_tracks['release_date'] = 'Available'
+                    if 'track_time_ms' not in artist_tracks.columns:
+                        artist_tracks['track_time_ms'] = artist_tracks.get('duration_ms', 0)
+
             if not artist_tracks.empty:
                 # Artist meta card
                 c_left, c_right = st.columns([2, 3])
@@ -810,6 +880,11 @@ def main():
             with st.spinner("Fetching live artist data..."):
                 t1 = fetch_itunes_artist_tracks(a1_query, 20)
                 t2 = fetch_itunes_artist_tracks(a2_query, 20)
+
+            if t1.empty and not local_df.empty:
+                t1 = local_df[local_df['artists'].str.contains(a1_query, case=False, na=False)].head(20).copy()
+            if t2.empty and not local_df.empty:
+                t2 = local_df[local_df['artists'].str.contains(a2_query, case=False, na=False)].head(20).copy()
 
             if t1.empty or t2.empty:
                 st.warning("Could not fetch data for one or both artists. Try different names.")
@@ -1255,9 +1330,9 @@ def main():
                         'tempo': tempo, 'acousticness': acousticness,
                         'speechiness': speechiness, 'loudness': loudness,
                     }])
-                    for col in columns:
-                        if col not in sample.columns:
-                            sample[col] = 0
+                    missing = [c for c in columns if c not in sample.columns]
+                    if missing:
+                        sample = pd.concat([sample, pd.DataFrame(0, index=sample.index, columns=missing)], axis=1)
                     sample  = sample[columns]
                     ml_prob = model.predict_proba(sample)[0][1] * 100
                 except Exception:
