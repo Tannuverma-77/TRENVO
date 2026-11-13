@@ -526,5 +526,10 @@ def generate_pdf(output_filename):
     print(f"PDF Successfully generated at: {output_filename}")
 
 if __name__ == "__main__":
-    out_path = sys.argv[1] if len(sys.argv) > 1 else "TRENVO_Technology_Stack_Hinglish.pdf"
+    if len(sys.argv) > 1:
+        out_path = sys.argv[1]
+    elif os.path.exists("docs"):
+        out_path = os.path.join("docs", "TRENVO_Technology_Stack_Hinglish.pdf")
+    else:
+        out_path = "TRENVO_Technology_Stack_Hinglish.pdf"
     generate_pdf(out_path)
