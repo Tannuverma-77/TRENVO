@@ -19,7 +19,7 @@ st.set_page_config(
 # ─── LIVE DATA FUNCTIONS ────────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800)  # refresh every 30 minutes
-def fetch_itunes_top_charts(limit=100, country="us"):
+def fetch_itunes_top_charts(limit=100, country="in"):
     """Fetch live top songs from Apple Music / iTunes RSS (free, no key needed)."""
     try:
         url = f"https://itunes.apple.com/{country}/rss/topsongs/limit={limit}/json"
@@ -44,6 +44,17 @@ def fetch_itunes_top_charts(limit=100, country="us"):
                 except Exception:
                     price = 0.0
 
+                # Extract audio preview URL
+                preview_url = ''
+                links = e.get('link', [])
+                if isinstance(links, dict):
+                    links = [links]
+                for l in links:
+                    attrs = l.get('attributes', {})
+                    if attrs.get('rel') == 'enclosure' or 'audio' in attrs.get('type', ''):
+                        preview_url = attrs.get('href', '')
+                        break
+
                 # Derive trend metrics from real chart position
                 rank         = i + 1
                 trend_score  = round(max(10, 100 - (i * 0.65) + random.uniform(-0.3, 0.5)), 1)
@@ -60,6 +71,7 @@ def fetch_itunes_top_charts(limit=100, country="us"):
                     'growth_pct':  growth_pct,
                     'art_url':     art_url,
                     'itunes_url':  itunes_url,
+                    'preview_url': preview_url,
                 })
             if tracks:
                 return pd.DataFrame(tracks), True
@@ -123,8 +135,8 @@ def fetch_itunes_artist_tracks(artist_name, limit=15):
 
 
 @st.cache_data(ttl=7200)
-def fetch_itunes_genre_charts():
-    """Fetch top songs across multiple genres from iTunes."""
+def fetch_itunes_genre_charts(country="in"):
+    """Fetch top songs across multiple genres from iTunes for selected country."""
     genre_ids = {
         'Pop':        14,
         'Hip-Hop':    18,
@@ -139,7 +151,7 @@ def fetch_itunes_genre_charts():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for genre_name, gid in genre_ids.items():
         try:
-            url = f"https://itunes.apple.com/us/rss/topsongs/limit=5/genre={gid}/json"
+            url = f"https://itunes.apple.com/{country}/rss/topsongs/limit=5/genre={gid}/json"
             r = requests.get(url, headers=headers, timeout=5)
             if r.status_code == 200:
                 feed = r.json().get('feed', {})
@@ -149,10 +161,20 @@ def fetch_itunes_genre_charts():
                 track_list = []
                 for e in entries:
                     images = e.get('im:image', [])
+                    links = e.get('link', [])
+                    if isinstance(links, dict):
+                        links = [links]
+                    preview = ''
+                    for l in links:
+                        attrs = l.get('attributes', {})
+                        if attrs.get('rel') == 'enclosure' or 'audio' in attrs.get('type', ''):
+                            preview = attrs.get('href', '')
+                            break
                     track_list.append({
-                        'track_name': e.get('im:name', {}).get('label', 'Unknown'),
-                        'artists':    e.get('im:artist', {}).get('label', 'Unknown'),
-                        'art_url':    images[-1].get('label', '').replace('100x100', '300x300') if images else '',
+                        'track_name':  e.get('im:name', {}).get('label', 'Unknown'),
+                        'artists':     e.get('im:artist', {}).get('label', 'Unknown'),
+                        'art_url':     images[-1].get('label', '').replace('100x100', '300x300') if images else '',
+                        'preview_url': preview,
                     })
                 if track_list:
                     results[genre_name] = track_list
@@ -192,6 +214,8 @@ def load_local_data():
                 df['growth_pct'] = 5.0
             if 'art_url' not in df.columns:
                 df['art_url'] = ''
+            if 'preview_url' not in df.columns:
+                df['preview_url'] = ''
         return df, wdf
     return pd.DataFrame(), pd.DataFrame()
 
@@ -240,8 +264,19 @@ def plotly_dark_bar(df, x, y, text=None, color=None, title=""):
     return fig
 
 
-
-
+def render_audio_player(preview_url, width="240px"):
+    """Render an HTML5 audio preview player with modern dark styling."""
+    if not preview_url or not isinstance(preview_url, str) or not preview_url.strip():
+        return ""
+    clean_url = preview_url.strip()
+    return (
+        f'<div style="margin-top:6px;margin-bottom:4px;">'
+        f'<audio controls controlslist="nodownload" preload="none" src="{clean_url}" '
+        f'style="height:32px;width:{width};max-width:100%;border-radius:16px;">'
+        f'Your browser does not support audio playback.'
+        f'</audio>'
+        f'</div>'
+    )
 
 
 # ─── GLOBAL CSS ─────────────────────────────────────────────────────────────
@@ -556,8 +591,23 @@ button[kind="primary"]:hover {
     color: #8899AA;
     text-transform: uppercase;
     letter-spacing: 2px;
-    margin-bottom: 30px;
+    margin-bottom: 20px;
     padding-left: 2px;
+}
+
+/* Custom Audio Player */
+audio {
+    height: 32px;
+    width: 100%;
+    max-width: 280px;
+    outline: none;
+    border-radius: 16px;
+    filter: invert(0.88) hue-rotate(180deg) brightness(1.2) contrast(1.1);
+    transition: transform 0.2s ease, filter 0.2s ease;
+}
+audio:hover {
+    transform: scale(1.02);
+    filter: invert(0.92) hue-rotate(180deg) brightness(1.3) contrast(1.2);
 }
 </style>
 """
@@ -568,8 +618,39 @@ button[kind="primary"]:hover {
 def main():
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-    # ── Load all data ──
-    live_df, using_live    = fetch_itunes_top_charts(100)
+    # ── Sidebar Branding ──
+    st.sidebar.markdown("""
+    <div class="sidebar-logo">
+        <div class="sidebar-logo-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+        </div>
+        TRENVO
+    </div>
+    <div class="sidebar-tagline">Music Trend Predictor</div>
+    """, unsafe_allow_html=True)
+
+    # ── Country Trend Selector ──
+    COUNTRIES = {
+        "🇮🇳 India": "in",
+        "🇺🇸 United States": "us",
+        "🇬🇧 United Kingdom": "gb",
+        "🇨🇦 Canada": "ca",
+        "🇦🇺 Australia": "au",
+        "🇩🇪 Germany": "de",
+        "🇯🇵 Japan": "jp",
+        "🇰🇷 South Korea": "kr",
+        "🇧🇷 Brazil": "br",
+        "🇫🇷 France": "fr",
+        "🇪🇸 Spain": "es",
+        "🌍 Global (Worldwide)": "us",
+    }
+
+    st.sidebar.markdown('<div style="font-size:0.75rem;color:#1DB954;text-transform:uppercase;letter-spacing:1px;margin:5px 0 6px 6px;font-weight:700;">🌍 Country Music Trends</div>', unsafe_allow_html=True)
+    selected_country_label = st.sidebar.selectbox("Select Country", list(COUNTRIES.keys()), index=0, label_visibility="collapsed")
+    selected_country_code = COUNTRIES[selected_country_label]
+
+    # ── Load all data for selected country ──
+    live_df, using_live    = fetch_itunes_top_charts(100, country=selected_country_code)
     local_df, local_weekly = load_local_data()
     model_data             = load_model()
 
@@ -583,18 +664,10 @@ def main():
             display_df['growth_pct'] = 0.0
         if 'art_url' not in display_df.columns:
             display_df['art_url'] = ''
+        if 'preview_url' not in display_df.columns:
+            display_df['preview_url'] = ''
 
-    # ── Sidebar ──
-    st.sidebar.markdown("""
-    <div class="sidebar-logo">
-        <div class="sidebar-logo-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-        </div>
-        TRENVO
-    </div>
-    <div class="sidebar-tagline">Music Trend Predictor</div>
-    """, unsafe_allow_html=True)
-
+    # ── Navigation Menu ──
     pages = [
         "🏠 Dashboard",
         "🏆 Top 10 Rankings",
@@ -605,13 +678,15 @@ def main():
         "🔮 AI Predictor",
     ]
     
-    st.sidebar.markdown('<div style="font-size:0.75rem;color:#B0B0B0;text-transform:uppercase;letter-spacing:1px;margin:10px 0 10px 10px;font-weight:700;">Menu</div>', unsafe_allow_html=True)
+    st.sidebar.markdown('<div style="font-size:0.75rem;color:#B0B0B0;text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px 6px;font-weight:700;">Menu</div>', unsafe_allow_html=True)
     page = st.sidebar.radio("Navigate", pages, label_visibility="collapsed")
     
-    st.sidebar.markdown('<div style="margin-top:40px;"></div>', unsafe_allow_html=True)
+    st.sidebar.markdown('<div style="margin-top:24px;"></div>', unsafe_allow_html=True)
     if st.sidebar.button("🔄 Refresh Live Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+
+    st.sidebar.markdown(f'<div style="text-align:center;font-size:0.78rem;color:#667788;margin-top:10px;">Active: <b style="color:#1DB954;">{selected_country_label}</b></div>', unsafe_allow_html=True)
 
     # ════════════════════════════════════════════════════════════
     #  1. DASHBOARD
@@ -623,12 +698,12 @@ def main():
             f"🔥 #{r.rank} {r.track_name} — {r.artists}" for r in top5.itertuples()
         ) if not top5.empty else "No live chart data available"
         st.markdown(
-            f'<div class="ticker-wrap"><div class="ticker"><b>TRENDING NOW &nbsp;›&nbsp;</b> {ticker_items}</div></div>',
+            f'<div class="ticker-wrap"><div class="ticker"><b>{selected_country_label.upper()} TRENDING NOW &nbsp;›&nbsp;</b> {ticker_items}</div></div>',
             unsafe_allow_html=True,
         )
 
-        st.markdown('<div class="hero-title">What\'s Trending Right Now?</div>', unsafe_allow_html=True)
-        source_label = "🟢 Live Apple Music Data" if using_live else "🟡 Latest Available Data"
+        st.markdown(f'<div class="hero-title">What\'s Trending in {selected_country_label}?</div>', unsafe_allow_html=True)
+        source_label = f"🟢 Live Apple Music ({selected_country_label})" if using_live else "🟡 Latest Available Data"
         st.markdown(
             f'<p style="color:#8899AA;font-size:1rem;">Discover songs, artists & genres gaining momentum · {source_label}</p>',
             unsafe_allow_html=True,
@@ -642,14 +717,16 @@ def main():
                 if top.get('art_url'):
                     st.markdown(f'<img src="{top["art_url"]}" style="width:100%;max-width:240px;border-radius:12px;box-shadow: 0 10px 30px rgba(0,0,0,0.6); margin-top:20px;">', unsafe_allow_html=True)
             with col_info:
+                hero_audio = render_audio_player(top.get('preview_url', ''), width='260px')
                 st.markdown(f"""
                 <div class="hero-section">
                     <div style="font-size:0.85rem;color:#1DB954;text-transform:uppercase;letter-spacing:2px;display:flex;align-items:center;gap:8px;">
-                        #1 Trending Right Now <div style="display:flex;"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>
+                        #1 Trending in {selected_country_label} <div style="display:flex;"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>
                     </div>
                     <h1 style="margin:6px 0 4px;font-size:3rem;letter-spacing:-1px;">{top['track_name']}</h1>
-                    <h3 style="color:#8899AA;margin:0;font-weight:400;">by <strong style="color:white;">{top['artists']}</strong></h3>
-                    <div style="display:flex;gap:40px;margin-top:24px;">
+                    <h3 style="color:#8899AA;margin:0;font-weight:400;">by <strong style="color:white;">{top['artists']}</strong> · <span style="color:#1DB954;">{top.get('track_genre', 'Pop')}</span></h3>
+                    {hero_audio}
+                    <div style="display:flex;gap:40px;margin-top:20px;">
                         <div><div class="metric-label">Trend Score</div><div style="font-size:2rem;font-weight:900;color:#1DB954;">{top['trend_score']}</div></div>
                         <div><div class="metric-label">Popularity</div><div style="font-size:2rem;font-weight:900;">{top['popularity']}/100</div></div>
                         <div><div class="metric-label">Growth</div><div style="font-size:2rem;font-weight:900;color:#{'1DB954' if top['growth_pct']>=0 else 'FF4B4B'};">{'▲' if top['growth_pct']>=0 else '▼'} {abs(top['growth_pct'])}%</div></div>
@@ -685,13 +762,14 @@ def main():
         col_left, col_right = st.columns([1.3, 1])
         with col_left:
             # ── Trending Now (Top 5) ──
-            st.markdown('<div class="section-title">🔥 Trending Now</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="section-title">🔥 Trending Now · {selected_country_label}</div>', unsafe_allow_html=True)
             for i, row in top5.iterrows():
                 rank_n = int(row['rank'])
                 art_html = f'<img src="{row["art_url"]}" class="album-art">' if row.get("art_url") else f'<div class="album-art" style="background:#1DB95440;display:flex;align-items:center;justify-content:center;font-size:1.5rem;">🎵</div>'
                 growth_color = "#1DB954" if row['growth_pct'] >= 0 else "#FF4B4B"
                 growth_arrow = "▲" if row['growth_pct'] >= 0 else "▼"
                 eq_html = '<div style="display:inline-flex;margin-left:12px;opacity:0.8;"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>' if rank_n <= 3 else ''
+                row_audio = render_audio_player(row.get('preview_url', ''), width='180px')
                 
                 st.markdown(f"""
                 <div class="glass-card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;">
@@ -701,6 +779,7 @@ def main():
                         <div>
                             <div style="font-size:1.1rem;font-weight:700;display:flex;align-items:center;">{row['track_name']} {eq_html}</div>
                             <div style="color:#8899AA;font-size:0.9rem;">{row['artists']} <span style="margin:0 6px;">•</span> {row['track_genre']}</div>
+                            {row_audio}
                         </div>
                     </div>
                     <div style="text-align:right;">
@@ -723,8 +802,8 @@ def main():
     #  2. TOP 10 RANKINGS
     # ════════════════════════════════════════════════════════════
     elif page == "🏆 Top 10 Rankings":
-        st.markdown('<div class="hero-title">Top 10 Rankings</div>', unsafe_allow_html=True)
-        src = "Apple Music Live Chart" if using_live else "Local Dataset"
+        st.markdown(f'<div class="hero-title">Top 10 Rankings · {selected_country_label}</div>', unsafe_allow_html=True)
+        src = f"Apple Music Live Chart ({selected_country_label})" if using_live else "Local Dataset"
         st.markdown(f'<p style="color:#8899AA;">The definitive live leaderboard · Source: {src}</p>', unsafe_allow_html=True)
 
         sort_by = st.selectbox("Sort by", ["Trend Score", "Popularity", "Growth %"], index=0)
@@ -748,10 +827,11 @@ def main():
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
         # Leaderboard cards
-        st.markdown('<div class="section-title">🏆 Leaderboard Breakdown</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-title">🏆 Leaderboard Breakdown · {selected_country_label}</div>', unsafe_allow_html=True)
         for idx, row in enumerate(top10.itertuples(), 1):
             art_html = f'<img src="{row.art_url}" class="album-art">' if row.art_url else '<div class="album-art" style="background:#1DB95440;display:flex;align-items:center;justify-content:center;font-size:1.5rem;">🎵</div>'
             growth_color = "#1DB954" if row.growth_pct >= 0 else "#FF4B4B"
+            row_audio = render_audio_player(getattr(row, 'preview_url', ''), width='210px')
             st.markdown(f"""
             <div class="glass-card" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;">
                 <div style="display:flex;align-items:center;gap:16px;">
@@ -760,6 +840,7 @@ def main():
                     <div>
                         <div style="font-size:1.1rem;font-weight:700;">{row.track_name}</div>
                         <div style="color:#8899AA;font-size:0.9rem;">{row.artists}</div>
+                        {row_audio}
                     </div>
                 </div>
                 <div style="display:flex;gap:30px;text-align:right;">
@@ -843,10 +924,11 @@ def main():
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
                 # Track cards with preview links
-                st.markdown('<div class="section-title">Track List</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Track List · Live Audio Previews</div>', unsafe_allow_html=True)
                 for _, t in artist_tracks.sort_values('trend_score', ascending=False).head(10).iterrows():
                     dur_s = int(t['track_time_ms'] / 1000) if t['track_time_ms'] else 0
                     dur   = f"{dur_s//60}:{dur_s%60:02d}" if dur_s else "–"
+                    track_audio = render_audio_player(t.get('preview_url', ''), width='200px')
                     st.markdown(f"""
                     <div class="glass-card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;">
                         <div style="display:flex;align-items:center;gap:14px;">
@@ -854,6 +936,7 @@ def main():
                             <div>
                                 <div style="font-weight:700;">{t['track_name']}</div>
                                 <div style="color:#8899AA;font-size:0.85rem;">{t['collection']} · {t['release_date']}</div>
+                                {track_audio}
                             </div>
                         </div>
                         <div style="display:flex;gap:20px;align-items:center;text-align:right;">
@@ -899,6 +982,9 @@ def main():
                     (ca, a1_query, t1, a1s, "#1DB954"),
                     (cb, a2_query, t2, a2s, "#7B2FBE"),
                 ]:
+                    top_prev = tracks.iloc[0].get('preview_url', '') if len(tracks) > 0 and 'preview_url' in tracks.columns else ''
+                    top_track_name = tracks.iloc[0].get('track_name', '') if len(tracks) > 0 else ''
+                    sample_audio = f'<div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);"><div class="metric-label" style="margin-bottom:4px;">Sample Track: {top_track_name}</div>{render_audio_player(top_prev, width="210px")}</div>' if top_prev else ''
                     col.markdown(f"""
                     <div class="glass-card" style="text-align:center;border-top:4px solid {color};">
                         <h2 style="color:{color};margin-bottom:4px;">{name}</h2>
@@ -908,6 +994,7 @@ def main():
                         <div class="metric-value">{score:.1f}</div>
                         <div class="metric-label" style="margin-top:10px;">Top Genre</div>
                         <div style="font-size:1rem;font-weight:600;">{tracks['track_genre'].mode()[0] if len(tracks)>0 else "–"}</div>
+                        {sample_audio}
                     </div>""", unsafe_allow_html=True)
 
                 # Simple Side-by-Side Audio Profile Comparison (No complex radar/spider web)
@@ -1030,11 +1117,11 @@ def main():
     #  5. GENRE INTELLIGENCE
     # ════════════════════════════════════════════════════════════
     elif page == "📈 Genre Intelligence":
-        st.markdown('<div class="hero-title">Genre Intelligence</div>', unsafe_allow_html=True)
-        st.markdown('<p style="color:#8899AA;">Explore live genre charts from Apple Music by category.</p>', unsafe_allow_html=True)
+        st.markdown(f'<div class="hero-title">Genre Intelligence · {selected_country_label}</div>', unsafe_allow_html=True)
+        st.markdown(f'<p style="color:#8899AA;">Explore live genre charts from Apple Music ({selected_country_label}) by category.</p>', unsafe_allow_html=True)
 
-        with st.spinner("Loading live genre charts..."):
-            genre_data = fetch_itunes_genre_charts()
+        with st.spinner(f"Loading live genre charts for {selected_country_label}..."):
+            genre_data = fetch_itunes_genre_charts(country=selected_country_code)
 
         if genre_data:
             tabs = st.tabs(list(genre_data.keys()))
@@ -1042,6 +1129,7 @@ def main():
                 with tab:
                     if songs:
                         for idx, s in enumerate(songs, 1):
+                            song_audio = render_audio_player(s.get('preview_url', ''), width='220px')
                             st.markdown(f"""
                             <div class="glass-card" style="display:flex;align-items:center;gap:16px;padding:12px 18px;">
                                 <span class="rank-badge" style="font-size:1.4rem;">#{idx}</span>
@@ -1049,6 +1137,7 @@ def main():
                                 <div>
                                     <div style="font-weight:700;">{s['track_name']}</div>
                                     <div style="color:#8899AA;font-size:0.88rem;">{s['artists']}</div>
+                                    {song_audio}
                                 </div>
                             </div>""", unsafe_allow_html=True)
                     else:
@@ -1069,8 +1158,8 @@ def main():
     #  6. WEEKLY TRENDS
     # ════════════════════════════════════════════════════════════
     elif page == "📅 Weekly Trends":
-        st.markdown('<div class="hero-title">Weekly Trend Tracker</div>', unsafe_allow_html=True)
-        st.markdown('<p style="color:#8899AA;">Simulate how songs build momentum over time using current live chart positions.</p>', unsafe_allow_html=True)
+        st.markdown(f'<div class="hero-title">Weekly Trend Tracker · {selected_country_label}</div>', unsafe_allow_html=True)
+        st.markdown(f'<p style="color:#8899AA;">Simulate how songs build momentum over time using current live chart positions in {selected_country_label}.</p>', unsafe_allow_html=True)
 
         if not display_df.empty:
             song_list = display_df.sort_values('trend_score', ascending=False)['track_name'].tolist()
@@ -1091,10 +1180,12 @@ def main():
 
                 weekly_df = pd.DataFrame({'Week': weeks, 'Trend Score': scores})
 
+                row_audio = render_audio_player(row.get('preview_url', ''), width='260px')
                 st.markdown(f"""
                 <div class="hero-section">
                     <h3 style="margin:0 0 4px;">{row['track_name']}</h3>
                     <p style="color:#8899AA;margin:0;">by {row['artists']} · {row['track_genre']}</p>
+                    {row_audio}
                     <div style="display:flex;gap:24px;margin-top:14px;">
                         <div><div class="metric-label">Current Rank</div><div style="font-size:1.4rem;font-weight:800;color:#1DB954;">#{int(row['rank'])}</div></div>
                         <div><div class="metric-label">Trend Score</div><div style="font-size:1.4rem;font-weight:800;color:#1DB954;">{row['trend_score']}</div></div>
@@ -1122,9 +1213,10 @@ def main():
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
                 # Also show top 5 weekly movers from live chart
-                st.markdown('<div class="section-title">Top 5 Fastest Rising Right Now</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="section-title">Top 5 Fastest Rising · {selected_country_label}</div>', unsafe_allow_html=True)
                 rising = display_df.sort_values('growth_pct', ascending=False).head(5)
                 for r in rising.itertuples():
+                    rising_audio = render_audio_player(getattr(r, 'preview_url', ''), width='180px')
                     st.markdown(f"""
                     <div class="glass-card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;">
                         <div style="display:flex;gap:14px;align-items:center;">
@@ -1132,6 +1224,7 @@ def main():
                             <div>
                                 <div style="font-weight:700;">{r.track_name}</div>
                                 <div style="color:#8899AA;font-size:0.85rem;">{r.artists}</div>
+                                {rising_audio}
                             </div>
                         </div>
                         <div style="color:#1DB954;font-size:1.1rem;font-weight:800;">▲ +{r.growth_pct}%</div>
