@@ -1,5 +1,6 @@
 import os
 import sys
+import hashlib
 import streamlit as st
 
 # Auto-launch via `streamlit run` if invoked directly via `python gui/app.py` or VS Code Run button
@@ -14,7 +15,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 import joblib
 import requests
-import random
+
+def deterministic_float(key: str, min_val: float, max_val: float, decimals: int = 1) -> float:
+    """Produces a completely stable, reproducible float for any given key across all devices (Phone, Laptop, etc.)."""
+    h = int(hashlib.md5(key.encode('utf-8', errors='ignore')).hexdigest()[:8], 16)
+    ratio = (h % 10000) / 10000.0
+    val = min_val + ratio * (max_val - min_val)
+    return round(val, decimals)
+
+def deterministic_int(key: str, min_val: int, max_val: int) -> int:
+    """Produces a completely stable, reproducible integer for any given key across all devices."""
+    h = int(hashlib.md5(key.encode('utf-8', errors='ignore')).hexdigest()[:8], 16)
+    return min_val + (h % (max_val - min_val + 1))
 
 st.set_page_config(
     page_title="TRENVO - Music Trend Predictor",
@@ -25,13 +37,13 @@ st.set_page_config(
 
 # ─── LIVE DATA FUNCTIONS ────────────────────────────────────────────────────
 
-@st.cache_data(ttl=1800)  # refresh every 30 minutes
+@st.cache_data(ttl=3600)  # refresh every 60 minutes
 def fetch_itunes_top_charts(limit=100, country="in"):
     """Fetch live top songs from Apple Music / iTunes RSS (free, no key needed)."""
     try:
         url = f"https://itunes.apple.com/{country}/rss/topsongs/limit={limit}/json"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(url, headers=headers, timeout=8)
+        r = requests.get(url, headers=headers, timeout=10)
         if r.status_code == 200:
             feed = r.json().get('feed', {})
             entries = feed.get('entry', [])
@@ -62,11 +74,13 @@ def fetch_itunes_top_charts(limit=100, country="in"):
                         preview_url = attrs.get('href', '')
                         break
 
-                # Derive trend metrics from real chart position
-                rank         = i + 1
-                trend_score  = round(max(10, 100 - (i * 0.65) + random.uniform(-0.3, 0.5)), 1)
-                popularity   = max(40, 100 - rank // 2)
-                growth_pct   = round(random.uniform(2, 25) if i < 20 else random.uniform(-5, 10), 1)
+                # Deterministic calculation: 100% IDENTICAL across all devices (phone, laptop, tablet)
+                rank = i + 1
+                t_key = f"{country}-{track_name}-{artist}"
+                delta = deterministic_float(t_key, -0.3, 0.3, 1)
+                trend_score = round(max(15.0, 100.0 - (i * 0.68) + delta), 1)
+                popularity = max(40, 100 - (rank // 2))
+                growth_pct = deterministic_float(t_key, 3.5, 24.5, 1) if rank <= 20 else deterministic_float(t_key, -5.5, 11.5, 1)
 
                 tracks.append({
                     'rank':        rank,
@@ -112,22 +126,26 @@ def fetch_musicbrainz_artist(artist_name):
     return None
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600)
 def fetch_itunes_artist_tracks(artist_name, limit=15):
     """Search iTunes for an artist's popular tracks with live data."""
     try:
         url = f"https://itunes.apple.com/search?term={requests.utils.quote(artist_name)}&media=music&entity=song&limit={limit}"
-        r = requests.get(url, timeout=6)
+        r = requests.get(url, timeout=8)
         if r.status_code == 200:
             results = r.json().get('results', [])
             tracks = []
             for j, t in enumerate(results):
+                t_name = t.get('trackName', 'Unknown')
+                t_key = f"{artist_name}-{t_name}-{j}"
+                pop = max(45, 96 - j * 2 + deterministic_int(t_key, -2, 2))
+                score = round(max(40.0, pop * 0.95 + deterministic_float(t_key, -2.0, 2.5, 1)), 1)
                 tracks.append({
-                    'track_name':     t.get('trackName', 'Unknown'),
+                    'track_name':     t_name,
                     'artists':        t.get('artistName', artist_name),
                     'track_genre':    t.get('primaryGenreName', 'Pop'),
-                    'popularity':     random.randint(55, 95),
-                    'trend_score':    round(random.uniform(60, 98), 1),
+                    'popularity':     pop,
+                    'trend_score':    score,
                     'art_url':        t.get('artworkUrl100', '').replace('100x100', '300x300'),
                     'collection':     t.get('collectionName', ''),
                     'release_date':   t.get('releaseDate', '')[:10],
@@ -622,6 +640,33 @@ audio:hover {
     transform: scale(1.02);
     filter: invert(0.92) hue-rotate(180deg) brightness(1.3) contrast(1.2);
 }
+
+/* Mobile Responsive Enhancements (Phone & Tablet) */
+@media (max-width: 768px) {
+    .hero-title {
+        font-size: 1.8rem !important;
+        letter-spacing: -0.5px !important;
+    }
+    .hero-section {
+        padding: 16px !important;
+    }
+    .hero-section h1 {
+        font-size: 1.7rem !important;
+        line-height: 1.2 !important;
+    }
+    .glass-card {
+        padding: 12px 14px !important;
+    }
+    .metric-value {
+        font-size: 1.5rem !important;
+    }
+    .ticker-wrap {
+        padding: 6px 0 !important;
+    }
+    audio {
+        max-width: 100% !important;
+    }
+}
 </style>
 """
 
@@ -658,16 +703,31 @@ def main():
         "🌍 Global (Worldwide)": "us",
     }
 
-    st.sidebar.markdown('<div style="font-size:0.75rem;color:#1DB954;text-transform:uppercase;letter-spacing:1px;margin:5px 0 6px 6px;font-weight:700;">🌍 Country Music Trends</div>', unsafe_allow_html=True)
-    selected_country_label = st.sidebar.selectbox("Select Country", list(COUNTRIES.keys()), index=0, label_visibility="collapsed")
-    selected_country_code = COUNTRIES[selected_country_label]
+    # ── Data Mode Selector (Consistent across Phone & Laptop) ──
+    st.sidebar.markdown('<div style="font-size:0.75rem;color:#1DB954;text-transform:uppercase;letter-spacing:1px;margin:8px 0 6px 6px;font-weight:700;">📊 Data Source Mode</div>', unsafe_allow_html=True)
+    source_mode = st.sidebar.radio(
+        "Data Source Mode",
+        ["🌍 Live Country Charts", "📁 Spotify 114k Dataset"],
+        index=0,
+        label_visibility="collapsed"
+    )
 
-    # ── Load all data for selected country ──
-    live_df, using_live    = fetch_itunes_top_charts(100, country=selected_country_code)
     local_df, local_weekly = load_local_data()
     model_data             = load_model()
 
-    display_df = live_df if using_live else local_df
+    if source_mode == "🌍 Live Country Charts":
+        st.sidebar.markdown('<div style="font-size:0.75rem;color:#8899AA;text-transform:uppercase;letter-spacing:1px;margin:8px 0 6px 6px;font-weight:700;">Select Country</div>', unsafe_allow_html=True)
+        selected_country_label = st.sidebar.selectbox("Select Country", list(COUNTRIES.keys()), index=0, label_visibility="collapsed")
+        selected_country_code = COUNTRIES[selected_country_label]
+        live_df, using_live    = fetch_itunes_top_charts(100, country=selected_country_code)
+        display_df = live_df if (using_live and live_df is not None and not live_df.empty) else local_df
+        active_source_text = f"Live Apple Music ({selected_country_label})"
+    else:
+        selected_country_label = "Spotify Global Dataset"
+        selected_country_code = "us"
+        using_live = False
+        display_df = local_df.copy() if not local_df.empty else pd.DataFrame()
+        active_source_text = "Spotify 114k Tracks Dataset"
 
     if not display_df.empty:
         if 'rank' not in display_df.columns:
@@ -699,7 +759,7 @@ def main():
         st.cache_data.clear()
         st.rerun()
 
-    st.sidebar.markdown(f'<div style="text-align:center;font-size:0.78rem;color:#667788;margin-top:10px;">Active: <b style="color:#1DB954;">{selected_country_label}</b></div>', unsafe_allow_html=True)
+    st.sidebar.markdown(f'<div style="text-align:center;font-size:0.78rem;color:#667788;margin-top:10px;">Active: <b style="color:#1DB954;">{active_source_text}</b></div>', unsafe_allow_html=True)
 
     # ════════════════════════════════════════════════════════════
     #  1. DASHBOARD
@@ -721,9 +781,8 @@ def main():
         )
 
         st.markdown(f'<div class="hero-title">What\'s Trending in {selected_country_label}?</div>', unsafe_allow_html=True)
-        source_label = f"🟢 Live Apple Music ({selected_country_label})" if using_live else "🟡 Latest Available Data"
         st.markdown(
-            f'<p style="color:#8899AA;font-size:1rem;">Discover songs, artists & genres gaining momentum · {source_label}</p>',
+            f'<div style="display:inline-flex;align-items:center;gap:8px;padding:6px 14px;background:rgba(29,185,84,0.1);border:1px solid rgba(29,185,84,0.3);border-radius:20px;margin-bottom:14px;"><span style="color:#1DB954;font-size:0.85rem;font-weight:700;">● {active_source_text}</span> <span style="color:#8899AA;font-size:0.8rem;">· {len(display_df):,} tracks synced</span></div>',
             unsafe_allow_html=True,
         )
 
@@ -1205,8 +1264,25 @@ def main():
         st.markdown(f'<div class="hero-title">Genre Intelligence · {selected_country_label}</div>', unsafe_allow_html=True)
         st.markdown(f'<p style="color:#8899AA;">Explore live genre charts from Apple Music ({selected_country_label}) by category.</p>', unsafe_allow_html=True)
 
-        with st.spinner(f"Loading live genre charts for {selected_country_label}..."):
-            genre_data = fetch_itunes_genre_charts(country=selected_country_code)
+        with st.spinner(f"Loading genre charts for {selected_country_label}..."):
+            genre_data = fetch_itunes_genre_charts(country=selected_country_code) if using_live else {}
+            if not genre_data and not local_df.empty:
+                genre_data = {}
+                top_genres = ['pop', 'rock', 'hip-hop', 'dance', 'electronic', 'r-n-b', 'indie', 'k-pop']
+                available_genres = [g for g in top_genres if g in local_df['track_genre'].values]
+                if not available_genres:
+                    available_genres = local_df['track_genre'].value_counts().head(6).index.tolist()
+                for g in available_genres:
+                    sub = local_df[local_df['track_genre'] == g].sort_values('trend_score', ascending=False).head(5)
+                    genre_data[g.title()] = [
+                        {
+                            'track_name': r.track_name,
+                            'artists': r.artists,
+                            'art_url': '',
+                            'preview_url': '',
+                        }
+                        for r in sub.itertuples()
+                    ]
 
         if genre_data:
             tabs = st.tabs(list(genre_data.keys()))
@@ -1253,15 +1329,25 @@ def main():
             if selected:
                 row = display_df[display_df['track_name'] == selected].iloc[0]
 
-                # Build a simulated weekly timeline based on current trend score
-                base_score = row['trend_score']
-                weeks = [f"Week {i}" for i in range(1, 9)]
-                scores = []
-                s = max(20, base_score - random.uniform(20, 40))
-                for w in weeks[:-1]:
-                    s = min(100, s + random.uniform(3, 12))
-                    scores.append(round(s, 1))
-                scores.append(round(base_score, 1))  # current week = real value
+                # Build a consistent, deterministic weekly timeline based on current trend score
+                base_score = float(row['trend_score'])
+                track_seed = f"{row.get('track_name', '')}-{row.get('artists', '')}"
+                
+                # If track exists in local weekly simulation dataset, use its data
+                if not local_weekly.empty and 'track_name' in local_weekly.columns and (local_weekly['track_name'] == selected).any():
+                    match_w = local_weekly[local_weekly['track_name'] == selected].sort_values('week')
+                    weeks = match_w['week'].tolist()
+                    scores = [round(float(s), 1) for s in match_w['trend_score'].tolist()]
+                else:
+                    weeks = [f"Week {i}" for i in range(1, 9)]
+                    scores = []
+                    start_offset = deterministic_float(f"{track_seed}-start", 16.0, 32.0, 1)
+                    base_start = max(20.0, base_score - start_offset)
+                    step = (base_score - base_start) / 7.0
+                    for w_idx in range(7):
+                        jitter = deterministic_float(f"{track_seed}-w{w_idx}", -1.8, 2.2, 1)
+                        scores.append(round(min(100.0, max(15.0, base_start + w_idx * step + jitter)), 1))
+                    scores.append(round(base_score, 1))
 
                 weekly_df = pd.DataFrame({'Week': weeks, 'Trend Score': scores})
 
