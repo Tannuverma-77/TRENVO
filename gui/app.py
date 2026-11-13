@@ -1,12 +1,19 @@
+import os
+import sys
 import streamlit as st
+
+# Auto-launch via `streamlit run` if invoked directly via `python gui/app.py` or VS Code Run button
+if __name__ == "__main__" and not st.runtime.exists():
+    from streamlit.web import cli as stcli
+    sys.argv = ["streamlit", "run", os.path.abspath(__file__)]
+    sys.exit(stcli.main())
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import joblib
-import os
 import requests
-from datetime import datetime, timedelta
 import random
 
 st.set_page_config(
