@@ -257,7 +257,7 @@ def plotly_dark_bar(df, x, y, text=None, color=None, title="", height=None):
         height=h,
         paper_bgcolor='#0A0E1A', plot_bgcolor='#0A0E1A',
         font=dict(color='white', size=12),
-        margin=dict(l=140, r=45, b=20, t=35 if title else 15),
+        margin=dict(l=90, r=35, b=20, t=30 if title else 15),
         coloraxis_showscale=False,
         xaxis=dict(showgrid=False, visible=False),
         yaxis=dict(showgrid=False, title="", tickfont=dict(color='#E2E8F0', size=12)),
@@ -871,7 +871,7 @@ def main():
             paper_bgcolor='#0A0E1A',
             plot_bgcolor='#0A0E1A',
             font=dict(color='white', size=12),
-            margin=dict(l=150, r=45, b=20, t=20),
+            margin=dict(l=100, r=40, b=20, t=20),
             xaxis=dict(
                 showgrid=True,
                 gridcolor='#1A2030',
@@ -1123,7 +1123,7 @@ def main():
                 bar_fig.update_layout(
                     barmode='group',
                     height=360,
-                    margin=dict(l=110, r=40, t=35, b=20),
+                    margin=dict(l=85, r=35, b=20, t=35),
                     paper_bgcolor='#0A0E1A',
                     plot_bgcolor='#0A0E1A',
                     font=dict(color='white'),

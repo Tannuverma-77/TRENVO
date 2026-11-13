@@ -355,6 +355,8 @@ def generate_pdf(output_filename):
         "&nbsp;&nbsp;&nbsp;&nbsp;• Raw Spotify dataset me se 1,14,000 records me se exact duplicate rows aur duplicate `track_id` drop kiye gaye.<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• 14 core numeric audio columns (danceability, energy, loudness, tempo, acousticness, etc.) ko sanitize aur typecast kiya gaya.<br/>"
         "• <b>Domain Feature Engineering (`feature_engineering.py`):</b><br/>"
+ 
+ 
         "&nbsp;&nbsp;&nbsp;&nbsp;• Music industry logic ke hisaab se custom continuous score derive kiya gaya:<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>trend_score = (Popularity * 0.6) + (Danceability * 100 * 0.2) + (Energy * 100 * 0.2)</b><br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• GroupBy aggregations se artist-level aur genre-level average trend benchmarks generate kiye gaye.<br/>"
