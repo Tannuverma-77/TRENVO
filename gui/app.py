@@ -238,21 +238,29 @@ def load_model():
 
 # ─── HELPER ────────────────────────────────────────────────────────────────
 
-def plotly_dark_bar(df, x, y, text=None, color=None, title=""):
+def plotly_dark_bar(df, x, y, text=None, color=None, title="", height=None):
+    if df is None or df.empty:
+        return go.Figure()
+    df_plot = df.copy()
+    if y in df_plot.columns:
+        df_plot[y] = df_plot[y].apply(lambda s: (str(s)[:24] + '...') if len(str(s)) > 26 else str(s))
+
     fig = px.bar(
-        df, x=x, y=y, orientation='h',
+        df_plot, x=x, y=y, orientation='h',
         color=color or x,
         color_continuous_scale='Viridis',
         text=text or x,
         title=title,
     )
+    h = height or max(320, min(550, len(df_plot) * 42))
     fig.update_layout(
-        paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
-        font=dict(color='white', size=13),
-        margin=dict(l=0, r=50, b=0, t=30),
+        height=h,
+        paper_bgcolor='#0A0E1A', plot_bgcolor='#0A0E1A',
+        font=dict(color='white', size=12),
+        margin=dict(l=140, r=45, b=20, t=35 if title else 15),
         coloraxis_showscale=False,
         xaxis=dict(showgrid=False, visible=False),
-        yaxis=dict(showgrid=False, title=""),
+        yaxis=dict(showgrid=False, title="", tickfont=dict(color='#E2E8F0', size=12)),
         title_font_color='white',
     )
     fig.update_traces(
@@ -816,20 +824,67 @@ def main():
         sort_col_map = {"Trend Score": "trend_score", "Popularity": "popularity", "Growth %": "growth_pct"}
         top10 = display_df.sort_values(sort_col_map[sort_by], ascending=False).head(10).reset_index(drop=True)
 
-        # Interactive chart
-        fig = px.bar(
-            top10.sort_values('trend_score', ascending=True),
-            x='trend_score', y='track_name', orientation='h',
-            color='trend_score', color_continuous_scale='Viridis',
-            text='artists',
-        )
+        # Interactive chart (Clean, overlap-free layout)
+        val_col = sort_col_map[sort_by]
+        top10_chart = top10.sort_values(val_col, ascending=True).copy()
+
+        # Format labels: truncate long names so letters never collide or wrap awkwardly
+        def format_track_label(name, max_len=24):
+            s = str(name).strip()
+            return (s[:max_len-3] + '...') if len(s) > max_len else s
+
+        top10_chart['display_name'] = top10_chart['track_name'].apply(format_track_label)
+
+        # Custom value formatting
+        if val_col == 'growth_pct':
+            val_format = '%{x:+.1f}%'
+        elif val_col == 'popularity':
+            val_format = '%{x:.0f}'
+        else:
+            val_format = '%{x:.1f}'
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=top10_chart['display_name'],
+            x=top10_chart[val_col],
+            orientation='h',
+            marker=dict(
+                color=top10_chart[val_col],
+                colorscale='Viridis',
+                showscale=False,
+                line=dict(width=0),
+            ),
+            text=top10_chart[val_col],
+            texttemplate=f'<b>{val_format}</b>',
+            textposition='outside',
+            cliponaxis=False,
+            customdata=np.stack((top10_chart['track_name'], top10_chart['artists']), axis=-1),
+            hovertemplate='<b>%{customdata[0]}</b><br>Artist: %{customdata[1]}<br>' + f'{sort_by}: ' + f'{val_format}<extra></extra>',
+        ))
+
+        # Dynamic safe X range so numbers outside bars never clip
+        max_v = float(top10_chart[val_col].max()) if not top10_chart.empty else 100.0
+        x_max = max(108.0, max_v * 1.15) if max_v > 0 else 100.0
+
         fig.update_layout(
-            paper_bgcolor='#0A0E1A', plot_bgcolor='#0A0E1A',
-            font=dict(color='white'), coloraxis_showscale=False,
-            margin=dict(l=0, r=0, b=0, t=20),
-            xaxis=dict(showgrid=False, visible=False), yaxis=dict(showgrid=False, title=""),
+            height=420,
+            paper_bgcolor='#0A0E1A',
+            plot_bgcolor='#0A0E1A',
+            font=dict(color='white', size=12),
+            margin=dict(l=150, r=45, b=20, t=20),
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='#1A2030',
+                range=[0, x_max] if val_col != 'growth_pct' else None,
+                tickfont=dict(color='#8899AA', size=11),
+                title=dict(text=f"{sort_by}", font=dict(color='#8899AA', size=12)),
+            ),
+            yaxis=dict(
+                showgrid=False,
+                title="",
+                tickfont=dict(color='#EAEAEA', size=12),
+            ),
         )
-        fig.update_traces(textposition='inside', insidetextanchor='middle')
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
         # Leaderboard cards
@@ -926,9 +981,9 @@ def main():
                         unsafe_allow_html=True,
                     )
 
-                # Track chart
+                # Track chart (Top 10 only for clean, spacious bars)
                 st.markdown('<div class="section-title">Top Tracks (Live from iTunes)</div>', unsafe_allow_html=True)
-                chart_df = artist_tracks.sort_values('trend_score', ascending=True)
+                chart_df = artist_tracks.sort_values('trend_score', ascending=True).tail(10)
                 fig = plotly_dark_bar(chart_df, x='trend_score', y='track_name', text='trend_score')
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
@@ -1041,7 +1096,7 @@ def main():
                 a1_scores = [a1_trend, a1_pop, a1_peak, a1_const, min(100, a1_count * 5)]
                 a2_scores = [a2_trend, a2_pop, a2_peak, a2_const, min(100, a2_count * 5)]
 
-                # Clean Horizontal Side-by-Side Comparison Bars
+                # Clean Horizontal Side-by-Side Comparison Bars (Overlap-Free)
                 bar_fig = go.Figure()
                 bar_fig.add_trace(go.Bar(
                     y=metrics,
@@ -1050,8 +1105,9 @@ def main():
                     orientation='h',
                     marker=dict(color='#1DB954'),
                     text=[f"{v:.1f}" for v in a1_scores],
-                    textposition='auto',
-                    textfont=dict(color='black', size=11),
+                    textposition='outside',
+                    cliponaxis=False,
+                    textfont=dict(color='#1DB954', size=11),
                 ))
                 bar_fig.add_trace(go.Bar(
                     y=metrics,
@@ -1060,25 +1116,26 @@ def main():
                     orientation='h',
                     marker=dict(color='#A855F7'),
                     text=[f"{v:.1f}" for v in a2_scores],
-                    textposition='auto',
-                    textfont=dict(color='white', size=11),
+                    textposition='outside',
+                    cliponaxis=False,
+                    textfont=dict(color='#C084FC', size=11),
                 ))
                 bar_fig.update_layout(
                     barmode='group',
                     height=360,
-                    margin=dict(l=20, r=20, t=30, b=20),
+                    margin=dict(l=110, r=40, t=35, b=20),
                     paper_bgcolor='#0A0E1A',
                     plot_bgcolor='#0A0E1A',
                     font=dict(color='white'),
                     xaxis=dict(
                         title="Score (0 - 100)",
-                        range=[0, 105],
+                        range=[0, 116],
                         gridcolor='#222222',
                         tickfont=dict(color='#8899AA'),
                     ),
                     yaxis=dict(
                         autorange="reversed",
-                        tickfont=dict(color='white', size=12),
+                        tickfont=dict(color='#EAEAEA', size=12),
                     ),
                     legend=dict(
                         orientation='h',
@@ -1208,7 +1265,7 @@ def main():
                     <p style="color:#8899AA;margin:0;">by {row['artists']} · {row['track_genre']}</p>
                     {row_audio}
                     <div style="display:flex;gap:24px;margin-top:14px;">
-                        <div><div class="metric-label">Current Rank</div><div style="font-size:1.4rem;font-weight:800;color:#1DB954;">#{int(row['rank'])}</div></div>
+                        <div><div class="metric-label">Current Rank</div><div style="font-size:1.4rem;font-weight:800;color:#1DB954;">#{int(float(row.get('rank', 1))) if pd.notna(row.get('rank')) else 1}</div></div>
                         <div><div class="metric-label">Trend Score</div><div style="font-size:1.4rem;font-weight:800;color:#1DB954;">{row['trend_score']}</div></div>
                         <div><div class="metric-label">Growth</div><div style="font-size:1.4rem;font-weight:800;">{'▲' if row['growth_pct']>=0 else '▼'} {abs(row['growth_pct'])}%</div></div>
                     </div>
@@ -1224,12 +1281,13 @@ def main():
                     fill='tozeroy', fillcolor='rgba(29,185,84,0.07)',
                 ))
                 fig.update_layout(
+                    height=360,
                     paper_bgcolor='#0A0E1A', plot_bgcolor='#0A0E1A',
                     font=dict(color='white'),
                     xaxis=dict(showgrid=True, gridcolor='#1A2030', title=''),
                     yaxis=dict(showgrid=True, gridcolor='#1A2030', range=[0, 105], title='Trend Score'),
-                    margin=dict(l=0, r=0, b=0, t=20),
-                    title=dict(text=f"Momentum Timeline: {selected}", font=dict(color='white')),
+                    margin=dict(l=45, r=25, b=25, t=40),
+                    title=dict(text=f"Momentum Timeline: {selected}", font=dict(color='white', size=14)),
                 )
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
@@ -1617,7 +1675,7 @@ def main():
                         <img src="{live_top.get('art_url','')}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;">
                         <div style="flex:1;">
                             <div style="font-weight:700;font-size:1.1rem;">{live_top['track_name']}</div>
-                            <div style="color:#8899AA;font-size:0.9rem;">by {live_top['artists']} · Rank #{int(live_top['rank'])}</div>
+                            <div style="color:#8899AA;font-size:0.9rem;">by {live_top['artists']} · Rank #{int(float(live_top.get('rank', 1))) if pd.notna(live_top.get('rank')) else 1}</div>
                         </div>
                         <div style="text-align:right;">
                             <div style="font-size:0.8rem;color:#8899AA;">Your Score vs #1</div>
