@@ -73,8 +73,7 @@ def fetch_itunes_top_charts(limit=100, country="in"):
                     'itunes_url':  itunes_url,
                     'preview_url': preview_url,
                 })
-            if tracks:
-                return pd.DataFrame(tracks), True
+            return pd.DataFrame(tracks), True
     except Exception:
         pass
     return None, False
@@ -148,11 +147,10 @@ def fetch_itunes_genre_charts(country="in"):
         'K-Pop':      51,
     }
     results = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for genre_name, gid in genre_ids.items():
         try:
             url = f"https://itunes.apple.com/{country}/rss/topsongs/limit=5/genre={gid}/json"
-            r = requests.get(url, headers=headers, timeout=5)
+            r = requests.get(url, timeout=5)
             if r.status_code == 200:
                 feed = r.json().get('feed', {})
                 entries = feed.get('entry', [])
@@ -223,13 +221,13 @@ def load_local_data():
 @st.cache_resource
 def load_model():
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidates_mp = [
+    candidates = [
         os.path.join(base, "model", "trend_model.pkl"),
         os.path.join(os.path.dirname(base), "model", "trend_model.pkl"),
         "model/trend_model.pkl",
         "TRENVO/model/trend_model.pkl",
     ]
-    for mp in candidates_mp:
+    for mp in candidates:
         if os.path.exists(mp):
             try:
                 return joblib.load(mp)
@@ -654,7 +652,7 @@ def main():
     local_df, local_weekly = load_local_data()
     model_data             = load_model()
 
-    display_df = live_df if (using_live and live_df is not None and not live_df.empty) else local_df
+    display_df = live_df if using_live else local_df
 
     if not display_df.empty:
         if 'rank' not in display_df.columns:
@@ -693,10 +691,15 @@ def main():
     # ════════════════════════════════════════════════════════════
     if page == "🏠 Dashboard":
         # Ticker
-        top5 = display_df.sort_values('trend_score', ascending=False).head(5) if not display_df.empty else pd.DataFrame()
-        ticker_items = " &nbsp;&nbsp;•&nbsp;&nbsp; ".join(
-            f"🔥 #{r.rank} {r.track_name} — {r.artists}" for r in top5.itertuples()
-        ) if not top5.empty else "No live chart data available"
+        if not display_df.empty:
+            top5 = display_df.sort_values('trend_score', ascending=False).head(5)
+            ticker_items = " &nbsp;&nbsp;•&nbsp;&nbsp; ".join(
+                f"🔥 #{int(float(r.rank)) if pd.notna(r.rank) else 1} {r.track_name} — {r.artists}" for r in top5.itertuples()
+            )
+        else:
+            top5 = pd.DataFrame()
+            ticker_items = "Connecting to live music charts..."
+
         st.markdown(
             f'<div class="ticker-wrap"><div class="ticker"><b>{selected_country_label.upper()} TRENDING NOW &nbsp;›&nbsp;</b> {ticker_items}</div></div>',
             unsafe_allow_html=True,
@@ -736,14 +739,14 @@ def main():
 
         # ── KPI row ──
         if not display_df.empty:
-            top_artist = display_df.groupby('artists')['trend_score'].mean().idxmax()
-            top_genre  = display_df.groupby('track_genre')['trend_score'].mean().idxmax()
-            avg_score  = display_df['trend_score'].mean()
+            top_artist = str(display_df.groupby('artists')['trend_score'].mean().idxmax())
+            top_genre  = str(display_df.groupby('track_genre')['trend_score'].mean().idxmax())
+            avg_score  = float(display_df['trend_score'].mean())
             trending_count = len(display_df[display_df['trend_score'] >= 75])
         else:
             top_artist = "N/A"
             top_genre  = "N/A"
-            avg_score  = 0
+            avg_score  = 0.0
             trending_count = 0
 
         c1, c2, c3, c4 = st.columns(4)
@@ -791,11 +794,14 @@ def main():
         with col_right:
             # ── Genre Chart ──
             st.markdown('<div class="section-title">🎸 Hottest Genres</div>', unsafe_allow_html=True)
-            genre_agg = display_df.groupby('track_genre').agg({'trend_score': 'mean'}).reset_index()
-            genre_agg = genre_agg.sort_values('trend_score', ascending=True).tail(10)
-            fig = plotly_dark_bar(genre_agg, x='trend_score', y='track_genre', text='trend_score')
-            fig.update_layout(height=480, margin=dict(l=0, r=0, t=10, b=0))
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            if not display_df.empty:
+                genre_agg = display_df.groupby('track_genre').agg({'trend_score': 'mean'}).reset_index()
+                genre_agg = genre_agg.sort_values('trend_score', ascending=True).tail(10)
+                fig = plotly_dark_bar(genre_agg, x='trend_score', y='track_genre', text='trend_score')
+                fig.update_layout(height=480, margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            else:
+                st.info("No genre data available.")
 
 
     # ════════════════════════════════════════════════════════════
@@ -866,16 +872,19 @@ def main():
                 mb_info       = fetch_musicbrainz_artist(artist_query)
 
             if artist_tracks.empty and not local_df.empty:
-                artist_tracks = local_df[local_df['artists'].str.contains(artist_query, case=False, na=False)].head(20).copy()
-                if not artist_tracks.empty:
-                    if 'art_url' not in artist_tracks.columns:
-                        artist_tracks['art_url'] = ''
+                local_match = local_df[local_df['artists'].str.contains(artist_query, case=False, na=False)].head(20).copy()
+                if not local_match.empty:
+                    artist_tracks = local_match
                     if 'collection' not in artist_tracks.columns:
                         artist_tracks['collection'] = artist_tracks.get('album_name', 'Single')
                     if 'release_date' not in artist_tracks.columns:
                         artist_tracks['release_date'] = 'Available'
                     if 'track_time_ms' not in artist_tracks.columns:
                         artist_tracks['track_time_ms'] = artist_tracks.get('duration_ms', 0)
+                    if 'art_url' not in artist_tracks.columns:
+                        artist_tracks['art_url'] = ''
+                    if 'preview_url' not in artist_tracks.columns:
+                        artist_tracks['preview_url'] = ''
 
             if not artist_tracks.empty:
                 # Artist meta card
@@ -972,6 +981,18 @@ def main():
             if t1.empty or t2.empty:
                 st.warning("Could not fetch data for one or both artists. Try different names.")
             else:
+                if 'popularity' not in t1.columns:
+                    t1['popularity'] = 60
+                if 'popularity' not in t2.columns:
+                    t2['popularity'] = 60
+                if 'preview_url' not in t1.columns:
+                    t1['preview_url'] = ''
+                if 'preview_url' not in t2.columns:
+                    t2['preview_url'] = ''
+                if 'art_url' not in t1.columns:
+                    t1['art_url'] = ''
+                if 'art_url' not in t2.columns:
+                    t2['art_url'] = ''
                 a1s = t1['trend_score'].mean()
                 a2s = t2['trend_score'].mean()
                 winner = a1_query if a1s > a2s else a2_query
@@ -1423,9 +1444,9 @@ def main():
                         'tempo': tempo, 'acousticness': acousticness,
                         'speechiness': speechiness, 'loudness': loudness,
                     }])
-                    missing = [c for c in columns if c not in sample.columns]
-                    if missing:
-                        sample = pd.concat([sample, pd.DataFrame(0, index=sample.index, columns=missing)], axis=1)
+                    for col in columns:
+                        if col not in sample.columns:
+                            sample[col] = 0
                     sample  = sample[columns]
                     ml_prob = model.predict_proba(sample)[0][1] * 100
                 except Exception:
